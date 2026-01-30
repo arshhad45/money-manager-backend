@@ -2,6 +2,7 @@ import express from "express";
 import Transaction from "../models/Transaction.js";
 import Account from "../models/Account.js";
 
+
 const router = express.Router();
 
 // Helper to apply account balance effects
@@ -40,7 +41,11 @@ router.post("/", async (req, res) => {
 
     await applyAccountEffects(tx, false);
 
-    res.status(201).json(tx);
+    const populatedTx = await Transaction.findById(tx._id)
+      .populate("fromAccount", "name type balance")
+      .populate("toAccount", "name type balance");
+
+    res.status(201).json(populatedTx);
   } catch (err) {
     console.error(err);
     res.status(400).json({ message: "Failed to create transaction", error: err.message });
@@ -72,6 +77,8 @@ router.get("/", async (req, res) => {
     }
 
     const txs = await Transaction.find(query)
+      .populate("fromAccount", "name type balance")
+      .populate("toAccount", "name type balance")
       .sort({ occurredAt: sort === "asc" ? 1 : -1 })
       .limit(Number(limit));
 
@@ -108,7 +115,11 @@ router.put("/:id", async (req, res) => {
     // apply new account effects
     await applyAccountEffects(tx, false);
 
-    res.json(tx);
+    const populatedTx = await Transaction.findById(tx._id)
+      .populate("fromAccount", "name type balance")
+      .populate("toAccount", "name type balance");
+
+    res.json(populatedTx);
   } catch (err) {
     console.error(err);
     res.status(400).json({ message: "Failed to update transaction", error: err.message });
