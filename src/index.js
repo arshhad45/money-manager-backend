@@ -1,4 +1,4 @@
-// DevOps Pipeline v1.0 - Automated Deploy
+// Pipeline v2.0
 import express from "express";
 import mongoose from "mongoose";
 import cors from "cors";
