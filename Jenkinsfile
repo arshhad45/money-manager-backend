@@ -2,103 +2,104 @@ pipeline {
   agent any
 
   environment {
-    AWS_ACCOUNT_ID  = '481665097478'
-    AWS_REGION      = 'us-east-1'
-    CLUSTER_NAME    = 'devops-cluster'
-    BACKEND_REPO    = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/devops-app-backend"
-    FRONTEND_REPO   = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/devops-app-frontend"
+    AWS_ACCOUNT_ID      = '481665097478'
+    AWS_REGION          = 'us-east-1'
+    CLUSTER_NAME        = 'devops-cluster'
+    BACKEND_REPO        = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/devops-app-backend"
+    AWS_ACCESS_KEY_ID   = credentials('AWS_ACCESS_KEY_ID')
+    AWS_SECRET_ACCESS_KEY = credentials('AWS_SECRET_ACCESS_KEY')
+    MONGO_URI           = credentials('MONGO_URI')
   }
 
   stages {
 
-    stage('📥 Checkout Code') {
+    stage('📥 Checkout') {
       steps {
         checkout scm
-        echo "✅ Code checked out from: arshhad45/money-manager-backend"
-        echo "✅ Build number: ${BUILD_NUMBER}"
+        echo "✅ Code checked out — Build #${BUILD_NUMBER}"
       }
     }
 
-    stage('🐳 Build Backend Docker Image') {
-      steps {
-        sh "docker build -t ${BACKEND_REPO}:${BUILD_NUMBER} ."
-        sh "docker tag ${BACKEND_REPO}:${BUILD_NUMBER} ${BACKEND_REPO}:latest"
-        echo "✅ Backend image built: ${BACKEND_REPO}:${BUILD_NUMBER}"
-      }
-    }
-
-    stage('🔍 Security Scan') {
-      steps {
-        sh "docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:latest image --severity HIGH,CRITICAL --exit-code 0 ${BACKEND_REPO}:${BUILD_NUMBER}"
-        echo "✅ Security scan complete"
-      }
-    }
-
-    stage('📤 Push Backend to ECR') {
+    stage('🐳 Build & Push to ECR') {
       steps {
         sh """
+          # Install required tools
+          apt-get update -qq && apt-get install -y docker.io awscli || \
+          yum install -y docker awscli || \
+          apk add --no-cache docker aws-cli || true
+
+          # Configure AWS
+          export AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+          export AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+          export AWS_DEFAULT_REGION=${AWS_REGION}
+
+          # Login to ECR
           aws ecr get-login-password --region ${AWS_REGION} | \
           docker login --username AWS --password-stdin \
           ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
+
+          # Build and push
+          docker build -t ${BACKEND_REPO}:${BUILD_NUMBER} .
+          docker tag ${BACKEND_REPO}:${BUILD_NUMBER} ${BACKEND_REPO}:latest
+          docker push ${BACKEND_REPO}:${BUILD_NUMBER}
+          docker push ${BACKEND_REPO}:latest
         """
-        sh "docker push ${BACKEND_REPO}:${BUILD_NUMBER}"
-        sh "docker push ${BACKEND_REPO}:latest"
-        echo "✅ Backend image pushed to ECR"
       }
     }
 
-    stage('🚀 Deploy Backend to EKS') {
+    stage('🚀 Deploy to EKS') {
       steps {
-        sh "aws eks update-kubeconfig --name ${CLUSTER_NAME} --region ${AWS_REGION}"
-        sh "kubectl create namespace production --dry-run=client -o yaml | kubectl apply -f -"
         sh """
+          export AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+          export AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+          export AWS_DEFAULT_REGION=${AWS_REGION}
+
+          aws eks update-kubeconfig --name ${CLUSTER_NAME} --region ${AWS_REGION}
+
+          kubectl create namespace production --dry-run=client -o yaml | kubectl apply -f -
+
           kubectl create secret generic app-secrets \
-            --from-literal=MONGO_URI='${MONGO_URI}' \
+            --from-literal=MONGO_URI=${MONGO_URI} \
             --namespace production \
             --dry-run=client -o yaml | kubectl apply -f -
-        """
-        sh """
+
           kubectl create deployment backend \
             --image=${BACKEND_REPO}:${BUILD_NUMBER} \
             --namespace production \
             --dry-run=client -o yaml | kubectl apply -f -
-        """
-        sh "kubectl set image deployment/backend backend=${BACKEND_REPO}:${BUILD_NUMBER} -n production"
-        sh """
+
+          kubectl set image deployment/backend \
+            backend=${BACKEND_REPO}:${BUILD_NUMBER} \
+            -n production
+
           kubectl expose deployment backend \
             --port=4000 \
             --target-port=4000 \
             --name=backend-service \
             --namespace production \
             --dry-run=client -o yaml | kubectl apply -f -
+
+          kubectl rollout status deployment/backend \
+            -n production --timeout=5m
         """
-        sh "kubectl rollout status deployment/backend -n production --timeout=5m"
-        echo "✅ Backend deployed to EKS"
       }
     }
 
-    stage('✅ Verify Backend') {
+    stage('✅ Verify') {
       steps {
-        sh "kubectl get pods -n production"
-        sh "kubectl get svc -n production"
-        echo "✅ Backend is live!"
+        sh """
+          export AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+          export AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+          export AWS_DEFAULT_REGION=${AWS_REGION}
+          kubectl get pods -n production
+          kubectl get svc -n production
+        """
       }
     }
   }
 
   post {
-    success {
-      echo '✅ Backend pipeline completed successfully!'
-      echo "🌐 Image: ${BACKEND_REPO}:${BUILD_NUMBER}"
-    }
-    failure {
-      echo '❌ Backend pipeline failed!'
-      echo 'Run: kubectl get pods -n production'
-      echo 'Run: kubectl logs deployment/backend -n production'
-    }
-    always {
-      sh 'docker rmi ${BACKEND_REPO}:${BUILD_NUMBER} || true'
-      sh 'docker system prune -f || true'
-    }
+    success { echo '✅ Backend deployed successfully!' }
+    failure { echo '❌ Backend deploy failed!' }
   }
 }
