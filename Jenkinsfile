@@ -6,12 +6,11 @@ apiVersion: v1
 kind: Pod
 spec:
   containers:
-  - name: jenkins-agent
+  - name: jnlp
     image: jenkins/inbound-agent:latest
-    command:
-    - sleep
-    args:
-    - infinity
+    volumeMounts:
+    - mountPath: /home/jenkins/agent
+      name: workspace-volume
   - name: docker
     image: docker:dind
     securityContext:
@@ -19,18 +18,21 @@ spec:
     env:
     - name: DOCKER_TLS_CERTDIR
       value: ""
-  - name: aws
-    image: amazon/aws-cli:latest
+    volumeMounts:
+    - mountPath: /home/jenkins/agent
+      name: workspace-volume
+  - name: tools
+    image: alpine/k8s:1.28.0
     command:
     - sleep
     args:
     - infinity
-  - name: kubectl
-    image: bitnami/kubectl:latest
-    command:
-    - sleep
-    args:
-    - infinity
+    volumeMounts:
+    - mountPath: /home/jenkins/agent
+      name: workspace-volume
+  volumes:
+  - name: workspace-volume
+    emptyDir: {}
 """
     }
   }
@@ -46,11 +48,11 @@ spec:
   }
 
   stages {
+
     stage('📥 Checkout') {
       steps {
         checkout scm
         echo "✅ Code checked out — Build #${BUILD_NUMBER}"
-        }
       }
     }
 
@@ -58,21 +60,25 @@ spec:
       steps {
         container('docker') {
           sh """
-            # Wait for Docker to be ready
             sleep 5
             docker info
 
-            # Login to ECR
-            apk add --no-cache aws-cli || true
+            apk add --no-cache aws-cli
+
+            export AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+            export AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+            export AWS_DEFAULT_REGION=${AWS_REGION}
+
             aws ecr get-login-password --region ${AWS_REGION} | \
             docker login --username AWS --password-stdin \
             ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
 
-            # Build and push
             docker build -t ${BACKEND_REPO}:${BUILD_NUMBER} .
             docker tag ${BACKEND_REPO}:${BUILD_NUMBER} ${BACKEND_REPO}:latest
             docker push ${BACKEND_REPO}:${BUILD_NUMBER}
             docker push ${BACKEND_REPO}:latest
+
+            echo "✅ Image pushed to ECR successfully!"
           """
         }
       }
@@ -80,17 +86,15 @@ spec:
 
     stage('🚀 Deploy to EKS') {
       steps {
-        container('aws') {
+        container('tools') {
           sh """
-            aws eks update-kubeconfig \
-              --name ${CLUSTER_NAME} \
-              --region ${AWS_REGION}
-          """
-        }
-        container('kubectl') {
-          sh """
-            kubectl create namespace production \
-              --dry-run=client -o yaml | kubectl apply -f -
+            export AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+            export AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+            export AWS_DEFAULT_REGION=${AWS_REGION}
+
+            aws eks update-kubeconfig --name ${CLUSTER_NAME} --region ${AWS_REGION}
+
+            kubectl create namespace production --dry-run=client -o yaml | kubectl apply -f -
 
             kubectl create secret generic app-secrets \
               --from-literal=MONGO_URI=${MONGO_URI} \
@@ -147,14 +151,16 @@ metadata:
   name: backend-service
   namespace: production
 spec:
+  type: ClusterIP
   selector:
     app: backend
   ports:
   - port: 4000
     targetPort: 4000
 EOF
-            kubectl rollout status deployment/backend \
-              -n production --timeout=5m
+
+            kubectl rollout status deployment/backend -n production --timeout=5m
+            echo "✅ Backend deployed successfully!"
           """
         }
       }
@@ -162,8 +168,12 @@ EOF
 
     stage('✅ Verify') {
       steps {
-        container('kubectl') {
+        container('tools') {
           sh """
+            export AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+            export AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+            export AWS_DEFAULT_REGION=${AWS_REGION}
+
             kubectl get pods -n production
             kubectl get svc -n production
           """
@@ -173,7 +183,7 @@ EOF
   }
 
   post {
-    success { echo '✅ Backend deployed successfully!' }
-    failure { echo '❌ Backend deploy failed!' }
+    success { echo '✅ Backend pipeline completed successfully!' }
+    failure { echo '❌ Backend pipeline failed!' }
   }
 }
