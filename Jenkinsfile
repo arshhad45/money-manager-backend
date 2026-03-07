@@ -46,12 +46,10 @@ spec:
   }
 
   stages {
-
     stage('📥 Checkout') {
       steps {
-        container('jenkins-agent') {
-          checkout scm
-          echo "✅ Code checked out — Build #${BUILD_NUMBER}"
+        checkout scm
+        echo "✅ Code checked out — Build #${BUILD_NUMBER}"
         }
       }
     }
