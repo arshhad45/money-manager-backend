@@ -5,7 +5,7 @@ pipeline {
 
   stage('Clone Backend Repo') {
    steps {
-    git 'https://github.com/arshhad45/money-manager-frontend.git'
+    git 'https://github.com/arshhad45/money-manager-backend.git'
    }
   }
 
