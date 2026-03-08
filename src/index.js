@@ -1,3 +1,4 @@
+// Pipeline v2.0
 import express from "express";
 import mongoose from "mongoose";
 import cors from "cors";
@@ -19,6 +20,10 @@ app.use(morgan("dev"));
 app.get("/", (req, res) => {
   res.json({ status: "ok", message: "Money Manager API" });
 });
+
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'UP', service: 'backend' })
+})
 
 app.use("/api/transactions", transactionsRouter);
 app.use("/api/accounts", accountsRouter);
