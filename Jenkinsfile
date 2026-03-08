@@ -3,10 +3,11 @@ pipeline {
 
  stages {
 
-  stage('Clone Backend Repo') {
-   steps {
-    git 'https://github.com/arshhad45/money-manager-backend.git'
-   }
+stage('Clone Backend Repo') {
+    steps {
+        git branch: 'main', url: 'https://github.com/arshhad45/money-manager-backend.git'
+    }
+}
   }
 
   stage('Install Dependencies') {
